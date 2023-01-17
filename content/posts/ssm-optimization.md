@@ -119,4 +119,3 @@ LBB0_1:
 crappy butterfly shuffle diagram, will make my own.
 ![Data exchange among 8 threads using butterfly warp shuffle operations. |  Download Scientific Diagram](https://www.researchgate.net/publication/317485271/figure/fig1/AS:505251083100160@1497472653903/Data-exchange-among-8-threads-using-butterfly-warp-shuffle-operations.png)
 
-
