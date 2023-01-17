@@ -11,11 +11,11 @@ draft: false
 I personally tend to eschew intuitive explanations of architectures and am instead attracted to more [mechanistic explanations](https://blog.nelhage.com/post/transformers-for-software-engineers/) of what the underlying math operation is. For State Space Models, the math is that you have some single-dimensional input array `u` of length `SEQUENCE_LENGTH` and a single-dimensional output array `y` of the same size. At every time step, you have a state vector, X, of size `STATE_SIZE`. A typical size for `STATE_SIZE` is e.g. 32 or 64. You have three parameters you try to fit: 1) a state transition matrix `A` of size (`STATE_SIZE`, `STATE_SIZE`), 2) a "new information introduction vector" `B` of size `STATE_SIZE`, and 3) a "state to output" vector `C` also of size `STATE_SIZE`. You then use these parameters as such to calculate your outputs: Xₜ = AXₜ₋₁ + Buₜ, yₜ=CXₜ . Note that this is totally linear. The vast majority of the work in these systems comes from multiplying A by X, because those are much bigger <!-- TODO: improve this sentence... -->. Dealing with this has been *the* major difficulty in making SSMs work practically.
 
 
-A few months after the crushing defeat of MIMO, the [Friend](https://en.wikipedia.org/wiki/Public_Universal_Friend) started to get into a different way to train SSMs where you [diagonalize](https://mathworld.wolfram.com/MatrixDiagonalization.html) the A matrix. This means that instead of doing `STATE_SIZE*2` flops for B+C and`STATE_SIZE^2` flops for A, we now do a total of `STATE_SIZE*3` flops, for A+B+C combined. This means that flops-wise we're no longer totally bottlenecked on the flops of A. There are a lot of questions about how numerically stable this is and whether it can really learn. But it's a fun challenge for optimization, because the math operation we're doing is now quite simple: For each head, take in three vectors: A, B, C, all of the same time. At every timestep, multiply your state by A, load in an input, multiply the input by B, add the state and the input together, multiply the resulting state by C, then write out the output. However, by default this is implemented in a horrendously inefficient way.
+A few months after the crushing defeat of MIMO, the [Friend](https://en.wikipedia.org/wiki/Public_Universal_Friend) started to get into a different way to train SSMs where you [diagonalize](https://mathworld.wolfram.com/MatrixDiagonalization.html) the A matrix. This reduces the computational intensity of such a system dramatically, from `STATE_SIZE^2 + STATE_SIZE*2` flops to `STATE_SIZE*3` flops. There are a lot of questions about how numerically stable this is and whether it can really learn. But it's a fun challenge for optimization, because the math operation we're doing is now quite simple: For each head, take in three vectors: A, B, C, all of the same time. At every timestep, multiply your state by A, load in an input, multiply the input by B, add the state and the input together, multiply the resulting state by C, then write out the output.
 
-## First implementation in Torch
+## Torch
 
-Here's a simple Pytorch function that implements this operation.
+How else would we implement something like this but in Pytorch? Here's a simple Pytorch function that implements this operation.
 
 ```python
 @torch.jit.script
@@ -23,13 +23,18 @@ def torch_diag(sequence, A, B, C):
     # get our shapes from tensors passed in
     N_HEADS, SEQUENCE_LENGTH = sequence.shape
     STATE_SIZE = B.shape[1]
-
     # allocate our output
-    torch_diag_outputs = torch.empty((N_HEADS, SEQUENCE_LENGTH), dtype=sequence.dtype, device=sequence.device)
-
+    torch_diag_outputs = torch.empty(
+        (N_HEADS, SEQUENCE_LENGTH),
+        dtype=sequence.dtype, device=sequence.device
+    )
     for i in range(N_HEADS):
         # create our state
-        state = torch.zeros((STATE_SIZE,), dtype=torch.float32, device="cuda")
+        state = torch.zeros(
+            (STATE_SIZE,),
+            dtype=torch.float32,
+            device=sequence.device
+        )
         for j in range(SEQUENCE_LENGTH):
             # multiply previous state by A
             previous_state_multed = A[i] * state
@@ -80,7 +85,7 @@ This looks similar to Torch, but with the added complexity of thinking directly 
 First a quick digression -- what is assembly on GPUs? By "assembly" here I mean [PTX](https://docs.nvidia.com/cuda/parallel-thread-execution/index.html) which is a language NVIDIA created as a lower level than CUDA so others writing high-level languages (e.g. [Google's CUDA compiler](https://research.google/pubs/pub45226/), [Halide](https://github.com/halide/Halide), Triton) could have a low-level language to compile to. /* This is sort of a bizarre situation, like if Intel had created hardware to run C on and then created assembly after the fact. TODO: include this?? */. /* Below PTX there's another language called "SASS" which is like GPU microcode -- the hardware executes it directly and it changes from generation to generation. Writing this is tricky TODO: include this? */ If you want to understand what Triton is actually doing, you have to look at the PTX. So off we go.
 
 The inner loop of our compiled kernel looks like this:
-```
+```c
 LBB0_1:
 	ld.global.b32 {%r13}, [ %rd21 + 0]; // load input value to %r13
 	mov.b32  %f17, %r13; // move the value in %r13 (generic 32 bit register) to %f17 (floating point register).
