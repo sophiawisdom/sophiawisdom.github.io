@@ -5,10 +5,12 @@ draft: false
 ---
 
 
-[I](https://twitter.com/cis_female) didn't have a job and was jonesing for some fun. [A friend](https://twitter.com/typedfemale) was working on State Space Models. What better use of my time could there be than being her performance engineer, and learning GPU internals while I was at it? We got cracking at [Noisebridge](https://noisebridge.net/), and in the course of a few amphetamine-fueled hours of writing and thinking, we had a should-be-functional [Triton](https://github.com/openai/triton) kernel. Unfortunately our code was so perfect we crashed the compiler in [two](https://github.com/openai/triton/issues/639) [different](https://github.com/openai/triton/issues/640) ways. Still amphetamine-fueled and now disgusted with Triton and determined to Go Deeper, I went home and read the entire [PTX ISA documentation](https://docs.nvidia.com/cuda/parallel-thread-execution/index.html). The next day I started working on a PTX kernel for Multi-Input Multi-Output ("MIMO") state space models. It took two weeks of scribbling about in-register transposes on a notebook and was deemed "[psychotic](https://twitter.com/typedfemale/status/1571025861155127296)" by fans. But my scribbles went in the trash, its psychoticness crushed by Risperdal. The theory behind MIMO was that GPUs are much better at matrix math than vector math, so if we transfigured our problem from vector to matrix we could make more efficient use of the [underlying hardware](https://www.nvidia.com/en-us/data-center/tensor-cores/). However, this transfiguration introduced so much overhead it wasn't faster then the direct calculation. We'll talk more about this later, but just remember for now that I was able to get about 22m elems/s @ STATE_SIZE=64.
-// TODO: not properly contextualizing the 50k/s of torch
+[I](https://twitter.com/cis_female) didn't have a job and was jonesing for some fun. [A friend](https://twitter.com/typedfemale) was working on State Space Models. What better use of my time could there be than being her performance engineer, and learning GPU internals while I was at it? We got cracking at [Noisebridge](https://noisebridge.net/), and in the course of a few amphetamine-fueled hours of writing and thinking, we had a should-be-functional [Triton](https://github.com/openai/triton) kernel. Unfortunately our code was so perfect we crashed the compiler in [two](https://github.com/openai/triton/issues/639) [different](https://github.com/openai/triton/issues/640) ways. Still amphetamine-fueled and now disgusted with Triton and determined to Go Deeper, I went home and read the entire [PTX ISA documentation](https://docs.nvidia.com/cuda/parallel-thread-execution/index.html). The next day I started working on a PTX kernel for Multi-Input Multi-Output ("MIMO") state space models. It took two weeks of scribbling about in-register transposes on a notebook and was deemed "[psychotic](https://twitter.com/typedfemale/status/1571025861155127296)" by fans. But MIMO is useless -- my scribbles went in the trash, its psychoticness crushed by Risperdal. The theory behind MIMO was that GPUs are much better at matrix math than vector math, so if we transfigured our problem from vector to matrix we could make more efficient use of the [underlying hardware](https://www.nvidia.com/en-us/data-center/tensor-cores/). However, this transfiguration introduced so much overhead it wasn't faster then the direct calculation (Single Input Single Output). We'll talk more about this later, but just remember for now that I was able to get about 22m elems/s @ STATE_SIZE=64.
 
-Later the friend started to get into a different way to train State Space Models where you diagonalize the A matrix. This means that instead of doing `STATE_SIZE*2` flops for B+C and`STATE_SIZE^2` flops for A, we now do a total of `STATE_SIZE*3` flops, for A+B+C combined. This means that flops-wise we're no longer totally bottlenecked on the flops of A. There are a lot of questions about how numerically stable this is and whether it can really learn. But it's a fun challenge for optimization, because the math operation we're doing is now quite simple: For each head, take in three vectors: A, B, C, all of the same time. At every timestep, multiply your state by A, load in an input, multiply the input by B, add the state and the input together, multiply the resulting state by C, then write out the output. However, by default this is implemented in a horrendously inefficient way.
+// TODO: not properly contextualizing the 50k/s of torch
+// TODO: give a brief explanation of the math behind SSMs. Don't talk about the ML, link elsewhere for that.
+
+A few months later, the friend started to get into a different way to train State Space Models where you diagonalize the A matrix. This means that instead of doing `STATE_SIZE*2` flops for B+C and`STATE_SIZE^2` flops for A, we now do a total of `STATE_SIZE*3` flops, for A+B+C combined. This means that flops-wise we're no longer totally bottlenecked on the flops of A. There are a lot of questions about how numerically stable this is and whether it can really learn. But it's a fun challenge for optimization, because the math operation we're doing is now quite simple: For each head, take in three vectors: A, B, C, all of the same time. At every timestep, multiply your state by A, load in an input, multiply the input by B, add the state and the input together, multiply the resulting state by C, then write out the output. However, by default this is implemented in a horrendously inefficient way.
 
 ## First implementation in Torch
 
@@ -47,7 +49,7 @@ This function can do approximately 50,000 elements/second on an A100 (all perf c
 ## Triton
 I have incredibly mixed feelings about Triton. When it works, it's magical. You write Torch-like vector/matrix operations and with only academic knowledge of the GPU even Research Scientists can produce highly performant code. The struggle of Triton is the compiler. Every time I have tried to write Triton code I've spent 1 hour writing the kernel and 10 hours debugging segfaults in the compiler. Even the [language tutorials](https://github.com/openai/triton/blob/master/python/tutorials/06-fused-attention.py#L18) have comments describing how they got around compiler bugs. The raison d'être for Triton's existence, in my opinion, is efficient code generation with matmuls, because matmuls and tensor cores break the fundamental abstraction of CUDA, the thread. Even though we're not using matmuls here, Triton is still quite good. Let's look at the code I wrote for the ssm_kernel:
 
-TODO: my triton code is wrong somehow, need to fix it.
+// TODO: my triton code is wrong somehow, need to fix it. Need to make sure it produces correct values.
 
 ```python
 @triton.jit
@@ -74,16 +76,18 @@ def ssm_kernel(sequence_ptr, a_ptr, b_ptr, c_ptr, output_ptr,
 
 This looks similar to Torch, but with the added complexity of thinking directly about memory loads and stores as opposed to just indexing into a matrix. However, it blows Torch out of the water on speed: !!4,600,000,000!! elements/s. Why is this? For one thing, it sends just one massive operation to the GPU instead of `5 * SEQUENCE_LENGTH * N_HEADS` operations. How do we understand what's actually going on inside this thing though? Just look at [the assembly](https://godbolt.org/z/4dT54Ejhd)!
 
-First a quick digression -- what is assembly on GPUs? By "assembly" here I mean [PTX](https://docs.nvidia.com/cuda/parallel-thread-execution/index.html) which is a language NVIDIA created as a lower level than CUDA so others writing high-level languages (e.g. [Google's CUDA compiler](https://research.google/pubs/pub45226/), [Halide](https://github.com/halide/Halide), Triton) could have a low-level language to compile to. If you want to understand what Triton is actually doing, you have to look at the PTX. So off we go.
+First a quick digression -- what is assembly on GPUs? By "assembly" here I mean [PTX](https://docs.nvidia.com/cuda/parallel-thread-execution/index.html) which is a language NVIDIA created as a lower level than CUDA so others writing high-level languages (e.g. [Google's CUDA compiler](https://research.google/pubs/pub45226/), [Halide](https://github.com/halide/Halide), Triton) could have a low-level language to compile to. /* This is sort of a bizarre situation, like if Intel had created hardware to run C on and then created assembly after the fact. TODO: include this?? */. /* Below PTX there's another language called "SASS" which is like GPU microcode -- the hardware executes it directly and it changes from generation to generation. Writing this is tricky TODO: include this? */ If you want to understand what Triton is actually doing, you have to look at the PTX. So off we go.
 
-The inner loop looks something like this:
+The inner loop of our compiled kernel looks like this:
 ```
 LBB0_1:
-	ld.global.b32 {%r13}, [ %rd21 + 0]; // load next input to %r13
+	ld.global.b32 {%r13}, [ %rd21 + 0]; // load input value to %r13
 	mov.b32  %f17, %r13; // move the value in %r13 (generic 32 bit register) to %f17 (floating point register).
 	// this does nothing physically.
-	mul.f32  %f18, %f2, %f17; // B (%f2) * input (%f17) -> %f18
-	fma.rn.f32  %f20, %f20, %f1, %f18; // A (%f1) * X (%f20) + f18 (B * input) -> X (%f20)
+
+    # multiply previous state by A, new input by B, add them together
+	mul.f32  %f18, %f2, %f17; // multiply new input (%f17) by B (%f2) -> %f18
+	fma.rn.f32  %f20, %f20, %f1, %f18; // Multiply previous state (%f20) by A (%f1) and then add this to (new_input * B) (%f18)
 
 	// calculate pointer to write to. Why does it do this in the inner loop?
 	// Your guess is as good as mine.
@@ -114,6 +118,8 @@ LBB0_1:
 	@%p6 bra LBB0_1;
 	ret;
 ```
+
+If we compare to our original code, we can clearly see each line of code corresponding to one or two lines of assembly. Great! I'm starting to feel like PTX is a breeze! But then there's this big block of shuffles. Now we have to start thinking about "warps" and "threads" so get ready.
 
 
 crappy butterfly shuffle diagram, will make my own.
