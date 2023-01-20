@@ -87,7 +87,7 @@ def ssm_kernel(sequence_ptr, a_ptr, b_ptr, c_ptr, output_ptr,
 
 This looks similar to Torch, but with the added complexity of thinking directly about memory loads and stores as opposed to just indexing into a matrix. However, it blows Torch out of the water on speed: !!4,600,000,000!! elements/s. Why is this? For one thing, it sends just one massive operation to the GPU instead of `5 * SEQUENCE_LENGTH * N_HEADS` operations. How do we understand what's actually going on inside this thing though? Just look at [the assembly](https://godbolt.org/z/4dT54Ejhd)!
 
-A sidenote -- many are scared of assembly, but on GPUs you generally write orders of magnitude less code and spend orders of magnitude more money on running it, so diving into the assembly is often worthwhile. So be courageous, and dive a level deeper with me!
+A sidenote -- many are scared of assembly, but on GPUs we generally write orders of magnitude less code and spend orders of magnitude more money on running it, so diving into the assembly is often worthwhile. So be courageous, and dive a level deeper with me!
 
 First a quick digression -- what is assembly on GPUs? By "assembly" here I mean [PTX](https://docs.nvidia.com/cuda/parallel-thread-execution/index.html) which is a language NVIDIA created as a lower level than CUDA so others writing high-level languages (e.g. [Google's CUDA compiler](https://research.google/pubs/pub45226/), [Halide](https://github.com/halide/Halide), Triton) could have a low-level language to compile to. /* This is sort of a bizarre situation, like if Intel had created hardware to run C on and then created assembly after the fact. TODO: include this?? */. /* Below PTX there's another language called "SASS" which is like GPU microcode -- the hardware executes it directly and it changes from generation to generation. NVIDIA really doesn't want you to use this, because if you write SASS it won't work with new GPUs. But you can do it anyway :p. TODO: include this? */ If you want to understand what Triton is actually doing, you have to look at the PTX. So off we go.
 
@@ -139,6 +139,8 @@ crappy butterfly shuffle diagram, will make my own.
 ![Data exchange among 8 threads using butterfly warp shuffle operations. |  Download Scientific Diagram](https://www.researchgate.net/publication/317485271/figure/fig1/AS:505251083100160@1497472653903/Data-exchange-among-8-threads-using-butterfly-warp-shuffle-operations.png)
 
 why is [SSM kernel with STATE_SIZE=4096](https://godbolt.org/z/KbGTxb4oh) 60x slower than [SSM kernel with STATE_SIZE=2048](https://godbolt.org/z/KbGTxb4oh)? challenge for the devoted reader! <!-- if you remove the 1-warp requirement it's only twice as slow, which we would expect. my guess is it hits some kind of limit for the number of registers in a SMSP. -->
+
+Remember how I told you it was useful reading assembly? I was just stringing you along for my real trap -- it's useful writing assembly! And that's how we'll get the remaining speedup.
 
 <!-- TODO: mathml/latec? -->
 [^1]: Specifically from 2 * STATE_SIZE^2 + 4 * STATE_SIZE flops to 5 * STATE_SIZE flops. For STATE_SIZE=32 this is a 13x decrease (2176 flops to 160 flops)
