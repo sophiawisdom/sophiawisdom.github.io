@@ -1,3 +1,9 @@
+---
+title: "SSM Optimization: An introduction to GPU performance optimization through the lens of a single kernel"
+date: 2023-01-17T04:20:46-08:00
+draft: false
+---
+
 A friend of mine was desperate -- just desperate -- for speedy kernels. She knew the math, she knew the ML, she knew what had to be done. But her kernels were ludicrously slow because she didn't understand the GPU. The GPU is a fundamentally different machine than the CPU, with fundamentally different capabilities, especially with the rise of Tensor Cores and other fixed-function "accelerators within the accelerator". It is difficult to predict and understand what math operations can be made to run quickly on the GPU and why.
 
 ## Why are GPUs such a big deal anyway?
@@ -13,9 +19,9 @@ What do GPUs accelerate? Originally graphics (*Graphics* Processing Unit) but no
 <!--
 This explanation is true and all we need to know to understand *this* kernel, but it leaves out arguably the most important part of modern GPUs which is the Tensor Cores. Tensor cores are special hardware inside NVIDIA GPUs for doing matrix multiplies.<!--TODO: add citation that they're not systolic arrays, just for fun-->
 
+In order to write code that takes advantage of this incredible speed, we need to be familiar with the hardware. The GPU is a 
 
-
-The A100 is divided into many different Streaming Multiprocessors (SMs), each with their own very fast memory called "shared memory" and four Streaming Multiprocessor SubProcessors (SMSPs) which can be thought of for our purposes as 1024 bit wide vector cores (i.e. they do 32 32-bit floating point operations at a time instead of 1 at a time) with Tensor Cores (explained later) and their own registers. They are [barrel processors](https://en.wikipedia.org/wiki/Barrel_processor), which can be thought of as if Hyperthreading with up to 64 threads.
+ The A100 is divided into many different Streaming Multiprocessors (SMs), each with their own very fast memory called "shared memory" and four Streaming Multiprocessor SubProcessors (SMSPs) which can be thought of for our purposes as 1024 bit wide vector cores (i.e. they do 32 32-bit floating point operations at a time instead of 1 at a time) with Tensor Cores (explained later) and their own registers. They are [barrel processors](https://en.wikipedia.org/wiki/Barrel_processor), which can be thought of as if Hyperthreading with up to 64 threads.
 
 <!-- BARREL PROCESSING IS GOOD BECAUSE IT'S LIKE *AWESOME* HYPERTHREADING AND WE DON'T CARE ABOUT ST PERFORMANCE -->
 <!-- REGISTERS MUCH MORE IMPORTANT BECAUSE NO CACHE, SO REGISTERS BIGGER DEAL. ALSO NO REGISTER RENAMING -->
