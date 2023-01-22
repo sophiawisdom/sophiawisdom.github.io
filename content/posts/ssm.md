@@ -1,5 +1,5 @@
 ---
-title: "SSM Optimization: An introduction to GPU performance optimization through the lens of a single kernel"
+title: "S4 Optimization: An introduction to GPU performance optimization through the lens of a single kernel"
 date: 2023-01-17T04:20:46-08:00
 draft: false
 ---
